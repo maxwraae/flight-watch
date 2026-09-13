@@ -1,0 +1,10 @@
+# your settings and your price history stay local
+config.toml
+*.csv
+*.log
+
+__pycache__/
+*.pyc
+.venv/
+venv/
+.DS_Store

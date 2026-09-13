@@ -1,0 +1,75 @@
+# flight-watch config. Copy to config.toml and edit. config.toml is gitignored.
+# Every setting below the [dates] section is optional and shows its default.
+
+# ---------------------------------------------------------------------------
+# Where you are going. IATA airport code, plus a readable name for the report.
+[destination]
+code = "LHR"
+city = "London"
+
+# ---------------------------------------------------------------------------
+# Where you might leave from. One entry per airport; add more to compare.
+# alert: the price at or below which the report flags "worth acting on".
+# Leave alert out to just watch without a target.
+[[origins]]
+code = "JFK"
+city = "New York"
+alert = 450
+
+# [[origins]]
+# code = "EWR"
+# city = "Newark"
+# alert = 450
+
+# ---------------------------------------------------------------------------
+# The date grid. Every outbound date is priced against every return date,
+# so 7 outbound days x 5 return days = 35 searches per airport, per run.
+# Remove both return_* lines for a one-way watch.
+[dates]
+outbound_from = "2027-03-01"
+outbound_to   = "2027-03-07"
+return_from   = "2027-03-15"
+return_to     = "2027-03-19"
+
+# ---------------------------------------------------------------------------
+[search]
+currency = "USD"
+adults = 1
+seat = "economy"            # economy | premium-economy | business | first
+# max_stops = 0             # 0 = nonstop only. Omit for any number of stops.
+
+# Also track the cheapest fare on one airline. Substring match on the airline
+# name Google shows, case-insensitive, e.g. "Delta", "Scandinavian", "Lufthansa".
+watch_airline = ""
+
+# Pacing. Google Flights throttles bursts, so these trade speed for reliability.
+# If the report keeps flagging SCRAPE HEALTH, lower max_workers or raise the pauses.
+max_workers = 4
+stagger_seconds = 0.5
+origin_pause_seconds = 15
+retry_pause_seconds = 25
+min_success_fraction = 0.75
+trend_runs = 10
+
+# ---------------------------------------------------------------------------
+# How the report reaches you.
+#   print    : write it to stdout (default; good for testing, cron mail, logs)
+#   smtp     : send email through any SMTP server (works everywhere)
+#   mail_app : send through Apple Mail on macOS, using an account already set up there
+[notify]
+method = "print"
+to = "you@example.com"
+
+# Only used when method = "smtp". The password is read from the environment
+# variable FLIGHT_WATCH_SMTP_PASSWORD. Do not put it in this file.
+# For Gmail, use an app password: https://myaccount.google.com/apppasswords
+[notify.smtp]
+host = "smtp.gmail.com"
+port = 587                  # 587 = STARTTLS, 465 = SSL
+user = "you@gmail.com"
+# from = "Flight Watch <you@gmail.com>"
+
+# ---------------------------------------------------------------------------
+[storage]
+# CSV of every price ever seen. Relative paths are relative to this file.
+log = "flight_watch_log.csv"
