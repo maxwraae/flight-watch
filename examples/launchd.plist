@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  macOS: run flight-watch every day at 09:00.
+  1. Replace every /ABSOLUTE/PATH/TO below with the real path to the repo.
+  2. Save as ~/Library/LaunchAgents/local.flight-watch.plist
+  3. launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/local.flight-watch.plist
+  Stop it: launchctl bootout gui/$(id -u)/local.flight-watch
+  For smtp delivery, add FLIGHT_WATCH_SMTP_PASSWORD under EnvironmentVariables.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>local.flight-watch</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/ABSOLUTE/PATH/TO/flight-watch/.venv/bin/python</string>
+    <string>/ABSOLUTE/PATH/TO/flight-watch/flight_watch.py</string>
+    <string>--config</string>
+    <string>/ABSOLUTE/PATH/TO/flight-watch/config.toml</string>
+  </array>
+  <key>StartCalendarInterval</key>
+  <dict><key>Hour</key><integer>9</integer><key>Minute</key><integer>0</integer></dict>
+  <key>StandardOutPath</key><string>/ABSOLUTE/PATH/TO/flight-watch/flight_watch.out.log</string>
+  <key>StandardErrorPath</key><string>/ABSOLUTE/PATH/TO/flight-watch/flight_watch.err.log</string>
+</dict>
+</plist>

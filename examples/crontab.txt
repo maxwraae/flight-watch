@@ -1,0 +1,3 @@
+# Linux / macOS cron: run flight-watch every day at 09:00.
+# Edit with `crontab -e`. Use absolute paths; cron has almost no environment.
+0 9 * * * cd /ABSOLUTE/PATH/TO/flight-watch && FLIGHT_WATCH_SMTP_PASSWORD='...' .venv/bin/python flight_watch.py >> flight_watch.out.log 2>> flight_watch.err.log
