@@ -1,1 +1,4 @@
 fast-flights==3.0.2
+# fast-flights imports typing_extensions but doesn't declare it, so a fresh
+# install fails without this line
+typing_extensions>=4.4

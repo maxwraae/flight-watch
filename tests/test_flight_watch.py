@@ -2,6 +2,7 @@
 
     python -m unittest discover tests
 """
+import ssl
 import sys
 import tempfile
 import textwrap
@@ -41,7 +42,9 @@ class Tmp(unittest.TestCase):
     def cfg(self, text=BASE):
         p = self.dir / "config.toml"
         p.write_text(textwrap.dedent(text))
-        return fw.load_config(p)
+        c = fw.load_config(p)
+        c.today = "2027-01-01"  # so the 2027 grids here never fall into the past
+        return c
 
 
 class ConfigTests(Tmp):
@@ -75,6 +78,50 @@ class ConfigTests(Tmp):
             with self.subTest(name), self.assertRaises(fw.ConfigError):
                 self.cfg(text)
 
+    def test_wrong_types_are_config_errors(self):
+        bad = {
+            "destination as a value": BASE.replace('[destination]\ncode = "lhr"\ncity = "London"',
+                                                   'destination = "LHR"'),
+            "single-bracket origins": BASE.replace("[[origins]]", "[origins]"),
+            "numeric code": BASE.replace('code = "JFK"', "code = 123"),
+            "alert as bool": BASE.replace("alert = 450", "alert = true"),
+            "adults as text": BASE + '\n[search]\nadults = "two"\n',
+            "too many adults": BASE + "\n[search]\nadults = 12\n",
+            "zero workers": BASE + "\n[search]\nmax_workers = 0\n",
+            "zero trend runs": BASE + "\n[search]\ntrend_runs = 0\n",
+            "max_stops as text": BASE + '\n[search]\nmax_stops = "0"\n',
+            "pause as text": BASE + '\n[search]\nstagger_seconds = "fast"\n',
+            "airline as number": BASE + "\n[search]\nwatch_airline = 5\n",
+            "to as a list": BASE + '\n[notify]\nmethod = "mail_app"\nto = ["a@b.c"]\n',
+            "smtp as a value": BASE + '\n[notify]\nsmtp = "x"\n',
+            "smtp port as text": BASE + '\n[notify]\nmethod = "smtp"\nto = "a@b.c"\n'
+                                 '[notify.smtp]\nhost = "h"\nuser = "u"\nport = "abc"\n',
+        }
+        for name, text in bad.items():
+            with self.subTest(name), self.assertRaises(fw.ConfigError):
+                self.cfg(text)
+
+    def test_numbers_and_unquoted_dates_are_accepted(self):
+        c = self.cfg(BASE.replace('"2027-03-01"', "2027-03-01")
+                     + "\n[search]\nmax_stops = 0\norigin_pause_seconds = 5\n")
+        self.assertEqual(len(c.combos), 3 * 2)
+        self.assertEqual((c.max_stops, c.origin_pause), (0, 5.0))
+
+    def test_overlapping_windows_skip_impossible_pairs(self):
+        # Google prices a return before the outbound; it must never be reported
+        c = self.cfg(BASE.replace('return_from   = "2027-03-15"', 'return_from   = "2027-03-02"'))
+        self.assertTrue(all(b >= o for o, b in c.combos))
+        self.assertIn(("2027-03-02", "2027-03-02"), c.combos)
+        self.assertNotIn(("2027-03-03", "2027-03-02"), c.combos)
+
+    def test_past_outbound_dates_are_skipped(self):
+        c = self.cfg()
+        c.today = "2027-03-02"
+        self.assertEqual({o for o, _b in c.combos}, {"2027-03-02", "2027-03-03"})
+        c.today = "2027-03-04"
+        self.assertEqual(c.combos, [])
+        self.assertEqual(fw.cmd_run(c, dry_run=True), 2)
+
     def test_missing_file(self):
         with self.assertRaises(fw.ConfigError):
             fw.load_config(self.dir / "nope.toml")
@@ -95,6 +142,12 @@ class HistoryAndReportTests(Tmp):
         self.assertEqual(fw.all_time_lows(rows)["JFK"][0], 470)
         runs = fw.run_bests(rows)
         self.assertEqual([runs[t]["JFK"][0] for t in sorted(runs)], [480, 470])
+
+    def test_empty_log_file_gets_a_header(self):
+        c = self.cfg()
+        c.log_path.touch()
+        fw.append_rows(c, "2027-01-01T09:00:00+00:00", grid(c, [500] * 6))
+        self.assertEqual(len(fw.read_rows(c)), 6)
 
     def test_rows_for_other_routes_are_ignored(self):
         c = self.cfg()
@@ -133,6 +186,16 @@ class HistoryAndReportTests(Tmp):
         self.assertIn("3200 DKK", self.report(c, None, [3200] * 6)[0])
 
 
+class RunTests(Tmp):
+    def test_missing_dependency_is_a_setup_error_not_a_report(self):
+        c = self.cfg()
+        with mock.patch.dict(sys.modules, {"fast_flights": None}), \
+                mock.patch.object(fw, "scan") as scan, mock.patch("sys.stderr"):
+            self.assertEqual(fw.cmd_run(c, dry_run=False), 2)
+        scan.assert_not_called()
+        self.assertFalse(c.log_path.exists())
+
+
 class DeliveryTests(Tmp):
     SMTP = BASE + """
 [notify]
@@ -161,6 +224,27 @@ user = "bot@example.com"
         server.login.assert_called_once_with("bot@example.com", "pw")
         msg = server.send_message.call_args[0][0]
         self.assertEqual((msg["To"], msg["Subject"]), ("me@example.com", "✈️ subject"))
+
+    def assertVerifies(self, ctx):
+        self.assertEqual(ctx.verify_mode, ssl.CERT_REQUIRED)
+        self.assertTrue(ctx.check_hostname)
+
+    def test_tls_certificates_are_verified(self):
+        # smtplib's default context does not verify; the password must not go
+        # to a server that can't prove who it is
+        c = self.cfg(self.SMTP)
+        with mock.patch.dict("os.environ", {fw.SMTP_PASSWORD_ENV: "pw"}), \
+                mock.patch("smtplib.SMTP") as smtp:
+            self.assertTrue(fw.deliver(c, "s", "b"))
+        self.assertVerifies(smtp.return_value.starttls.call_args.kwargs["context"])
+
+        c = self.cfg(self.SMTP + "port = 465\n")
+        with mock.patch.dict("os.environ", {fw.SMTP_PASSWORD_ENV: "pw"}), \
+                mock.patch("smtplib.SMTP_SSL") as smtp_ssl, mock.patch("smtplib.SMTP") as smtp:
+            self.assertTrue(fw.deliver(c, "s", "b"))
+        smtp.assert_not_called()
+        self.assertVerifies(smtp_ssl.call_args.kwargs["context"])
+        smtp_ssl.return_value.login.assert_called_once_with("bot@example.com", "pw")
 
 
 if __name__ == "__main__":
