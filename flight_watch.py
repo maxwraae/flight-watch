@@ -28,6 +28,7 @@ import concurrent.futures as cf
 import csv
 import os
 import smtplib
+import ssl
 import subprocess
 import sys
 import time
@@ -81,6 +82,9 @@ class Config:
     notify_to: str = ""
     smtp: dict = field(default_factory=dict)
     log_path: Path = Path("flight_watch_log.csv")
+    # outbound dates before this are skipped: Google can't price a past flight,
+    # and counting those as failed fetches would read as throttling
+    today: str = field(default_factory=lambda: date.today().isoformat())
 
     @property
     def one_way(self) -> bool:
@@ -88,14 +92,25 @@ class Config:
 
     @property
     def combos(self) -> list[tuple[str, str | None]]:
+        """Every date pair worth pricing. Pairs that return before they leave are
+        skipped: Google still quotes a price for them, but nobody can fly it."""
+        outs = [o for o in self.out_dates if o >= self.today]
         if self.one_way:
-            return [(o, None) for o in self.out_dates]
-        return [(o, b) for o in self.out_dates for b in self.back_dates]
+            return [(o, None) for o in outs]
+        return [(o, b) for o in outs for b in self.back_dates if b >= o]
 
 
-def _date_range(start: str, end: str, what: str) -> list[str]:
+def _iso(v) -> date:
+    # TOML reads a quoted "2027-03-01" as text and an unquoted 2027-03-01 as a
+    # date. Take both.
+    if isinstance(v, date) and not isinstance(v, datetime):
+        return v
+    return date.fromisoformat(v)
+
+
+def _date_range(start, end, what: str) -> list[str]:
     try:
-        s, e = date.fromisoformat(start), date.fromisoformat(end)
+        s, e = _iso(start), _iso(end)
     except (TypeError, ValueError):
         raise ConfigError(f"{what}: dates must be YYYY-MM-DD, got {start!r} and {end!r}")
     if e < s:
@@ -107,31 +122,61 @@ def _date_range(start: str, end: str, what: str) -> list[str]:
     return out
 
 
+def _table(parent: dict, key: str, name: str) -> dict:
+    v = parent.get(key) or {}
+    if not isinstance(v, dict):
+        raise ConfigError(f"{name} must be a section, [{name}], not a single value")
+    return v
+
+
+_KINDS = {str: "text in quotes", int: "a whole number", float: "a number"}
+
+
+def _opt(table: dict, key: str, default, name: str, lo=None, hi=None):
+    """table[key], or default when absent. It must be the same type as the
+    default (a whole number is fine where a number is expected), within lo..hi,
+    so a wrong value is a config error and not a traceback mid-run."""
+    v = table.get(key, default)
+    kind = type(default)
+    if isinstance(v, bool) or not isinstance(v, (int, float) if kind is float else kind):
+        raise ConfigError(f"{name}: {key} must be {_KINDS[kind]}, got {v!r}")
+    if (lo is not None and v < lo) or (hi is not None and v > hi):
+        bound = f"at least {lo}" if hi is None else f"between {lo} and {hi}"
+        raise ConfigError(f"{name}: {key} must be {bound}, got {v!r}")
+    return float(v) if kind is float else v
+
+
 def load_config(path: Path) -> Config:
-    if not path.exists():
+    try:
+        raw = tomllib.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
         raise ConfigError(f"no config at {path}. Copy config.example.toml to config.toml "
                           "and fill it in.")
-    try:
-        raw = tomllib.loads(path.read_text())
     except tomllib.TOMLDecodeError as exc:
         raise ConfigError(f"{path} is not valid TOML: {exc}")
+    except OSError as exc:
+        # e.g. macOS blocking a background job from ~/Documents
+        raise ConfigError(f"can't read {path}: {exc}")
 
-    dest = raw.get("destination") or {}
-    if not dest.get("code"):
+    dest = _table(raw, "destination", "destination")
+    if not dest.get("code") or not isinstance(dest["code"], str):
         raise ConfigError("[destination] needs a code, e.g. code = \"LHR\"")
 
+    raw_origins = raw.get("origins") or []
+    if not isinstance(raw_origins, list) or not all(isinstance(o, dict) for o in raw_origins):
+        raise ConfigError("write each origin as its own [[origins]] section, with double brackets")
     origins = []
-    for o in raw.get("origins") or []:
-        if not o.get("code"):
+    for o in raw_origins:
+        if not o.get("code") or not isinstance(o["code"], str):
             raise ConfigError("every [[origins]] entry needs a code, e.g. code = \"JFK\"")
-        alert = o.get("alert")
-        if alert is not None and not isinstance(alert, int):
-            raise ConfigError(f"origin {o['code']}: alert must be a whole number")
-        origins.append(Origin(o["code"].upper(), o.get("city", o["code"].upper()), alert))
+        code = o["code"].upper()
+        where = f"origin {code}"
+        alert = _opt(o, "alert", 0, where, lo=1) if "alert" in o else None
+        origins.append(Origin(code, _opt(o, "city", code, where), alert))
     if not origins:
         raise ConfigError("add at least one [[origins]] entry")
 
-    dates = raw.get("dates") or {}
+    dates = _table(raw, "dates", "dates")
     for k in ("outbound_from", "outbound_to"):
         if k not in dates:
             raise ConfigError(f"[dates] is missing {k}")
@@ -145,35 +190,37 @@ def load_config(path: Path) -> Config:
     if back_dates and back_dates[0] < out_dates[0]:
         raise ConfigError("the return window starts before the outbound window")
 
-    search = raw.get("search") or {}
-    notify = raw.get("notify") or {}
-    storage = raw.get("storage") or {}
+    search = _table(raw, "search", "search")
+    notify = _table(raw, "notify", "notify")
+    storage = _table(raw, "storage", "storage")
+    dest_code = dest["code"].upper()
 
     cfg = Config(
         path=path,
-        dest_code=dest["code"].upper(),
-        dest_city=dest.get("city", dest["code"].upper()),
+        dest_code=dest_code,
+        dest_city=_opt(dest, "city", dest_code, "destination"),
         origins=origins,
         out_dates=out_dates,
         back_dates=back_dates,
-        currency=search.get("currency", "USD"),
-        adults=int(search.get("adults", 1)),
-        seat=search.get("seat", "economy"),
-        max_stops=search.get("max_stops"),
-        watch_airline=search.get("watch_airline", ""),
-        results_per_query=int(search.get("results_per_query", 12)),
-        max_workers=int(search.get("max_workers", 4)),
-        stagger=float(search.get("stagger_seconds", 0.5)),
-        origin_pause=float(search.get("origin_pause_seconds", 15)),
-        retry_pause=float(search.get("retry_pause_seconds", 25)),
-        min_success_frac=float(search.get("min_success_fraction", 0.75)),
-        trend_runs=int(search.get("trend_runs", 10)),
-        notify_method=notify.get("method", "print"),
-        notify_to=notify.get("to", ""),
-        smtp=notify.get("smtp") or {},
+        currency=_opt(search, "currency", "USD", "search"),
+        adults=_opt(search, "adults", 1, "search", lo=1, hi=9),  # Google's limit is 9
+        seat=_opt(search, "seat", "economy", "search"),
+        max_stops=(_opt(search, "max_stops", 0, "search", lo=0)
+                   if "max_stops" in search else None),
+        watch_airline=_opt(search, "watch_airline", "", "search"),
+        results_per_query=_opt(search, "results_per_query", 12, "search", lo=1),
+        max_workers=_opt(search, "max_workers", 4, "search", lo=1),
+        stagger=_opt(search, "stagger_seconds", 0.5, "search", lo=0),
+        origin_pause=_opt(search, "origin_pause_seconds", 15.0, "search", lo=0),
+        retry_pause=_opt(search, "retry_pause_seconds", 25.0, "search", lo=0),
+        min_success_frac=_opt(search, "min_success_fraction", 0.75, "search", lo=0, hi=1),
+        trend_runs=_opt(search, "trend_runs", 10, "search", lo=1),
+        notify_method=_opt(notify, "method", "print", "notify"),
+        notify_to=_opt(notify, "to", "", "notify"),
+        smtp=_table(notify, "smtp", "notify.smtp"),
         # a relative log path is relative to the config file, not the cwd, so a
         # scheduler running from / still finds the same history
-        log_path=(path.parent / storage.get("log", "flight_watch_log.csv")).resolve(),
+        log_path=(path.parent / _opt(storage, "log", "flight_watch_log.csv", "storage")).resolve(),
     )
 
     if cfg.seat not in ("economy", "premium-economy", "business", "first"):
@@ -186,6 +233,9 @@ def load_config(path: Path) -> Config:
         for k in ("host", "user"):
             if not cfg.smtp.get(k):
                 raise ConfigError(f"[notify.smtp] is missing {k}")
+            _opt(cfg.smtp, k, "", "notify.smtp")
+        _opt(cfg.smtp, "from", "", "notify.smtp")
+        _opt(cfg.smtp, "port", 587, "notify.smtp", lo=1, hi=65535)
     return cfg
 
 
@@ -286,7 +336,8 @@ def read_rows(cfg: Config) -> list[dict]:
 
 
 def append_rows(cfg: Config, ts: str, results: dict) -> None:
-    new = not cfg.log_path.exists()
+    # an empty file needs the header too, or every row after it reads as garbage
+    new = not cfg.log_path.exists() or cfg.log_path.stat().st_size == 0
     cfg.log_path.parent.mkdir(parents=True, exist_ok=True)
     with cfg.log_path.open("a", newline="") as fh:
         w = csv.writer(fh)
@@ -534,13 +585,17 @@ def deliver(cfg: Config, subject: str, body: str) -> bool:
     msg["To"] = cfg.notify_to
     msg.set_content(body)
     port = int(cfg.smtp.get("port", 587))
+    # smtplib's own default context skips certificate checks, which would hand
+    # the password to anyone in the middle. Always verify.
+    tls = ssl.create_default_context()
     try:
         if port == 465:
-            server = smtplib.SMTP_SSL(cfg.smtp["host"], port, timeout=60)
+            server = smtplib.SMTP_SSL(cfg.smtp["host"], port, timeout=60, context=tls)
         else:
             server = smtplib.SMTP(cfg.smtp["host"], port, timeout=60)
-            server.starttls()
         with server:
+            if port != 465:
+                server.starttls(context=tls)
             server.login(cfg.smtp["user"], password)
             server.send_message(msg)
         return True
@@ -582,6 +637,17 @@ def cmd_test(cfg: Config) -> int:
 
 
 def cmd_run(cfg: Config, dry_run: bool) -> int:
+    if not cfg.combos:
+        sys.stderr.write("config error: every outbound date is already in the past. Move "
+                         "[dates] forward, or stop the schedule if the trip is booked.\n")
+        return 2
+    try:
+        import fast_flights  # noqa: F401
+    except ImportError as exc:
+        # checked up front: otherwise every fetch fails and the report blames Google
+        sys.stderr.write(f"setup error: {exc} (python: {sys.executable}). "
+                         "Install the requirements: pip install -r requirements.txt\n")
+        return 2
     prev_rows = read_rows(cfg)
     ts = datetime.now(timezone.utc).isoformat(timespec="seconds")
     results = {}
