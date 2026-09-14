@@ -90,7 +90,13 @@ fares rarely move faster than that, and it keeps load on Google light.
 - **Linux / macOS cron:** [`examples/crontab.txt`](examples/crontab.txt)
 
 The run exits `0` on success, `1` if the report could not be delivered, and
-`2` on a config error, so a scheduler can tell them apart.
+`2` on a config or install problem (including a date window that has entirely
+passed), so a scheduler can tell them apart.
+
+On macOS, keep the repo out of Desktop, Documents, Downloads and iCloud Drive.
+macOS privacy protection stops background jobs reading those folders unless
+you grant extra access, so a scheduled run can fail there even though the same
+command works in your terminal.
 
 ## Things to know
 
@@ -106,8 +112,13 @@ The run exits `0` on success, `1` if the report could not be delivered, and
   expensive. Check before you buy.
 - **Missing is not zero.** A date that fails to price is logged empty and
   never counts as a low.
+- **Dates that have passed are skipped**, so the grid shrinks as the trip gets
+  close. Date pairs that would return before leaving are never searched.
 - **History is per route.** Change the destination or remove an origin and
-  the report ignores those old rows, but they stay in the CSV.
+  the report ignores those old rows, but they stay in the CSV. The log does not
+  record currency, cabin, passengers or one-way vs return, so if you change any
+  of those, point `[storage] log` at a new file or the old prices will skew
+  "all-time low" and "vs last".
 - Your `config.toml` and price log are gitignored. Keep your SMTP password in
   the environment, not the file.
 
