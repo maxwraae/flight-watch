@@ -24,7 +24,8 @@ alert = 450
 # ---------------------------------------------------------------------------
 # The date grid. Every outbound date is priced against every return date,
 # so 7 outbound days x 5 return days = 35 searches per airport, per run.
-# Remove both return_* lines for a one-way watch.
+# Pairs that would return before leaving are skipped, and so are outbound
+# dates that have already passed. Remove both return_* lines for a one-way watch.
 [dates]
 outbound_from = "2027-03-01"
 outbound_to   = "2027-03-07"
@@ -72,4 +73,6 @@ user = "you@gmail.com"
 # ---------------------------------------------------------------------------
 [storage]
 # CSV of every price ever seen. Relative paths are relative to this file.
+# Start a new file if you change currency, cabin, adults or one-way vs return;
+# the log doesn't record those, so old prices would skew the comparisons.
 log = "flight_watch_log.csv"

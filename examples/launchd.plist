@@ -3,6 +3,8 @@
 <!--
   macOS: run flight-watch every day at 09:00.
   1. Replace every /ABSOLUTE/PATH/TO below with the real path to the repo.
+     Not inside Desktop, Documents, Downloads or iCloud Drive: macOS privacy
+     protection stops background jobs reading those.
   2. Save as ~/Library/LaunchAgents/local.flight-watch.plist
   3. launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/local.flight-watch.plist
   Stop it: launchctl bootout gui/$(id -u)/local.flight-watch

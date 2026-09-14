@@ -18,7 +18,8 @@ translate to config yourself.
   nearby alternatives only if they would genuinely consider travelling to one.
 - **Dates.** A window of days they could leave, and a window they could come
   back. No return window means one-way. Keep grids modest: outbound days ×
-  return days is the number of searches per airport per run. Stay around 60 or
+  return days is the number of searches per airport per run (pairs that
+  would return before leaving are skipped). Stay around 60 or
   below; well past that, Google throttles and the results thin out.
 - **Target price** per airport (optional): "tell me when it's under X".
 - **Currency, passengers, cabin, nonstop only.** Defaults are USD, 1 adult,
@@ -63,6 +64,8 @@ It takes roughly `(number of combos × 0.5s) + fetch time` per airport.
 - If many combos are empty, it is throttling. Retry later, or shrink the grid
   or lower `max_workers`.
 - A `config error:` line explains exactly what is wrong. Fix and rerun.
+- A `setup error:` line means the requirements are not installed for the
+  Python that ran it. Use `.venv/bin/python`, or reinstall the requirements.
 
 Then confirm delivery reaches them:
 
@@ -76,13 +79,22 @@ before it sends. That is normal, not a failure.
 ### 5. Schedule it
 
 Once a day. Use absolute paths everywhere; schedulers have a minimal environment.
+On macOS the repo must not live in Desktop, Documents, Downloads or iCloud
+Drive: macOS privacy protection stops background jobs reading those folders, so
+the job can fail even though the same command works in a terminal. Move it (for
+example to `~/code`) first.
 
 - **macOS:** fill in `examples/launchd.plist`, save to
   `~/Library/LaunchAgents/`, then
   `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/<file>.plist`.
   Remove with `launchctl bootout gui/$(id -u)/<label>`.
-  `mail_app` delivery may prompt once for permission to control Mail; have
-  the user run `--test-notify` from a terminal first to grant it.
+  `mail_app` delivery needs permission to control Mail. Running
+  `--test-notify` in a terminal grants it to the terminal app, not to the
+  scheduled job, which asks again on its first run, when nobody may be there
+  to click Allow. So right after bootstrapping, with the user at the Mac, run
+  the job once with `launchctl kickstart gui/$(id -u)/<label>` (a real run: it
+  logs prices and sends a report), have them approve the prompt, and check the
+  `.err.log` for `[notify-error]`.
 - **Linux, or cron on macOS:** see `examples/crontab.txt`.
 
 Tell the user what you scheduled, when it runs, and exactly how to stop it.
@@ -95,6 +107,9 @@ to delete it.
 ## Changing things later
 
 - New dates, target or airports: edit `config.toml`. No code change.
+- Changing currency, cabin, adults or one-way vs return: also point
+  `[storage] log` at a new file. The log doesn't record those settings, so old
+  rows would make the comparisons wrong.
 - Removing an origin hides its old rows from reports; it does not delete them.
 - `--history` shows every logged run and the all-time lows.
 
