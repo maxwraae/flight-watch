@@ -395,6 +395,17 @@ def _d(iso: str | None) -> str:
         return iso
 
 
+def _run_day(ts: str, with_time: bool = False) -> str:
+    """A logged UTC timestamp, shown in the reader's own timezone. The log stays
+    UTC so it is unambiguous, but a run at 09:00 in Copenhagen should not be
+    dated the previous day in the report."""
+    try:
+        local = datetime.fromisoformat(ts).astimezone()
+    except ValueError:
+        return ts[:16] if with_time else ts[:10]
+    return local.strftime("%Y-%m-%d %H:%M" if with_time else "%Y-%m-%d")
+
+
 def _dates(out_d: str | None, back_d: str | None) -> str:
     return f"{_d(out_d)} → {_d(back_d)}" if back_d else _d(out_d)
 
@@ -465,6 +476,9 @@ def build_report(cfg: Config, today: dict, prev_rows: list[dict],
             lines.append("  First run, so there is no history to compare against yet.")
         elif b["price"] < prior_low:
             lines.append(f"  ▼ The cheapest it has ever been (previous best {m(prior_low)}).")
+        elif b["price"] == prior_low:
+            lines.append("  Matching the all-time low, first seen "
+                         f"{_run_day(min(v[3] for v in lows.values() if v[0] == prior_low))}.")
         else:
             lines.append(f"  All-time cheapest seen: {m(prior_low)}. "
                          f"You are {m(b['price'] - prior_low)} above that.")
@@ -521,17 +535,25 @@ def build_report(cfg: Config, today: dict, prev_rows: list[dict],
             code = min(per, key=lambda c: per[c][0])
             p, od, bd = per[code]
             where = "" if single else f" {code}"
-            lines.append(f"  {ts[:10]}  {m(p):>9}{where}  ({_dates(od, bd or None)})")
+            lines.append(f"  {_run_day(ts)}  {m(p):>9}{where}  ({_dates(od, bd or None)})")
 
     # ---- scrape health, folded in rather than sent separately ----
     if unhealthy:
         lines += ["", "SCRAPE HEALTH: these came back thin, so the numbers above may "
                       "miss cheaper fares:"] + [f"  {u}" for u in unhealthy]
 
-    grid = (f"{_d(cfg.out_dates[0])}–{_d(cfg.out_dates[-1])} outbound"
-            + ("" if cfg.one_way else f" × {_d(cfg.back_dates[0])}–{_d(cfg.back_dates[-1])} return"))
-    lines += ["", f"Grid: {grid}, {len(cfg.combos)} date combos per airport, "
-                  f"{cfg.seat}, {cfg.adults} adult(s)."]
+    # describe what was actually priced: past outbound days and pairs that
+    # return before they leave are skipped, so the configured window can be wider
+    combos = cfg.combos
+    outs = sorted({o for o, _b in combos})
+    grid = f"{_d(outs[0])}–{_d(outs[-1])} outbound"
+    if not cfg.one_way:
+        backs = sorted({b for _o, b in combos})
+        grid += f" × {_d(backs[0])}–{_d(backs[-1])} return"
+    skipped = len(cfg.out_dates) * (1 if cfg.one_way else len(cfg.back_dates)) - len(combos)
+    lines += ["", f"Grid: {grid}, {len(combos)} date combos per airport, "
+                  f"{cfg.seat}, {cfg.adults} adult(s)."
+                  + (f" {skipped} combo(s) skipped as past or impossible." if skipped else "")]
     return subject, "\n".join(lines)
 
 
@@ -618,12 +640,13 @@ def cmd_history(cfg: Config) -> int:
         seen = sorted((ts, per[o.code]) for ts, per in runs.items() if o.code in per)
         print(f"\n{o.code} ({o.city}) → {cfg.dest_code}: {len(seen)} run(s)")
         for ts, (p, od, bd) in seen:
-            print(f"  {ts[:16]}  {_money(cfg, p):>9}  ({_dates(od, bd or None)})")
+            print(f"  {_run_day(ts, with_time=True)}  {_money(cfg, p):>9}  "
+                  f"({_dates(od, bd or None)})")
         if o.code in lows:
             p, od, bd, ts = lows[o.code]
             target = f", target {_money(cfg, o.alert)}" if o.alert is not None else ""
             print(f"  all-time low {_money(cfg, p)} ({_dates(od, bd or None)}), "
-                  f"seen {ts[:10]}{target}")
+                  f"seen {_run_day(ts)}{target}")
     return 0
 
 

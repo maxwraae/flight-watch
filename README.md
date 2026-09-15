@@ -48,7 +48,7 @@ worth the trip to get there.
 
 ## Setup
 
-Needs Python 3.11 or newer.
+Needs Python 3.11 or newer (tested on 3.12, 3.13 and 3.14).
 
 ```bash
 git clone https://github.com/maxwraae/flight-watch.git
@@ -120,7 +120,11 @@ command works in your terminal.
   of those, point `[storage] log` at a new file or the old prices will skew
   "all-time low" and "vs last".
 - Your `config.toml` and price log are gitignored. Keep your SMTP password in
-  the environment, not the file.
+  the environment, not the file. A `password` in `[notify.smtp]` works as a
+  fallback, but anything running as you can read it.
+- **Report times are local, the log is UTC.** The CSV timestamps every run in
+  UTC so the history is unambiguous; reports and `--history` convert to your
+  timezone.
 
 ## Using an AI assistant to set it up
 
