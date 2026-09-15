@@ -30,7 +30,7 @@ translate to config yourself.
 ### 2. Install and write the config
 
 ```bash
-python3 --version        # must be 3.11+
+python3 --version        # must be 3.11+ (tested on 3.12 to 3.14)
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 cp config.example.toml config.toml
@@ -45,7 +45,8 @@ Edit `config.toml`. Every key is documented inline in `config.example.toml`.
   passwords. Only works on macOS.
 - `smtp`: works everywhere. The password goes in the environment variable
   `FLIGHT_WATCH_SMTP_PASSWORD`, **never in config.toml, never committed, never
-  echoed back in chat logs**. For Gmail the user needs an app password from
+  echoed back in chat logs**. (`password` under `[notify.smtp]` is read as a
+  fallback, but do not put it there unless the user asks.) For Gmail the user needs an app password from
   https://myaccount.google.com/apppasswords (it requires 2-step verification);
   let them paste it into their own shell or scheduler config.
 

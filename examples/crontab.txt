@@ -1,3 +1,7 @@
 # Linux / macOS cron: run flight-watch every day at 09:00.
 # Edit with `crontab -e`. Use absolute paths; cron has almost no environment.
+#
+# Careful with % in a password: cron treats it as a newline, so escape it as \%.
+# Better, keep the password out of here. Put it in a file only you can read
+# (chmod 600) and source it: 0 9 * * * . /path/to/secrets.sh && cd ... 
 0 9 * * * cd /ABSOLUTE/PATH/TO/flight-watch && FLIGHT_WATCH_SMTP_PASSWORD='...' .venv/bin/python flight_watch.py >> flight_watch.out.log 2>> flight_watch.err.log

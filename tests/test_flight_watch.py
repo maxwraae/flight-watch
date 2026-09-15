@@ -5,6 +5,7 @@
 import ssl
 import sys
 import tempfile
+import time
 import textwrap
 import unittest
 from unittest import mock
@@ -180,6 +181,34 @@ class HistoryAndReportTests(Tmp):
         subj, body = self.report(self.cfg(), None, [None] * 6)
         self.assertIn("no prices", subj)
         self.assertIn("SCRAPE HEALTH", body)
+
+    def test_matching_the_all_time_low_is_not_a_zero_gap(self):
+        c = self.cfg()
+        _, body = self.report(c, [500] * 6, [500] * 6)
+        self.assertIn("Matching the all-time low, first seen 2027-01-01", body)
+        self.assertNotIn("$0 above", body)
+
+    def test_run_days_are_shown_in_local_time(self):
+        # a run logged at 23:30 UTC is the next day in Copenhagen, and the
+        # previous day in New York: the report must follow the reader
+        for tz, expected in (("Europe/Copenhagen", "2027-01-02"),
+                             ("America/New_York", "2027-01-01")):
+            with self.subTest(tz), mock.patch.dict("os.environ", {"TZ": tz}):
+                time.tzset()
+                self.assertEqual(fw._run_day("2027-01-01T23:30:00+00:00"), expected)
+                self.assertEqual(fw._run_day("2027-01-01T23:30:00+00:00", with_time=True)[:10],
+                                 expected)
+        time.tzset()
+
+    def test_grid_line_reports_what_was_priced(self):
+        c = self.cfg()
+        _, body = self.report(c, None, [500] * 6)
+        self.assertIn("Grid: Mar 1–Mar 3 outbound × Mar 15–Mar 16 return, 6 date combos", body)
+        c.today = "2027-03-03"                      # two outbound days now past
+        today, unhealthy = fw.summarize(c, grid(c, [500] * 2))
+        body = fw.build_report(c, today, [], unhealthy)[1]
+        self.assertIn("2 date combos per airport", body)
+        self.assertIn("4 combo(s) skipped as past or impossible.", body)
 
     def test_non_usd_currency(self):
         c = self.cfg(BASE + '\n[search]\ncurrency = "DKK"\n')

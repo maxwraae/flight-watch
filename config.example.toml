@@ -52,6 +52,11 @@ retry_pause_seconds = 25
 min_success_fraction = 0.75
 trend_runs = 10
 
+# How many itineraries to read per search. Google returns them cheapest first,
+# so 12 is plenty to find the lowest fare. Raise it only if you want a wider
+# net for watch_airline, which may not appear in the first few results.
+results_per_query = 12
+
 # ---------------------------------------------------------------------------
 # How the report reaches you.
 #   print    : write it to stdout (default; good for testing, cron mail, logs)
@@ -62,7 +67,9 @@ method = "print"
 to = "you@example.com"
 
 # Only used when method = "smtp". The password is read from the environment
-# variable FLIGHT_WATCH_SMTP_PASSWORD. Do not put it in this file.
+# variable FLIGHT_WATCH_SMTP_PASSWORD. Prefer that: a password in this file can
+# be read by anything on the machine and is easy to copy somewhere public by
+# accident. If you must, `password = "..."` here is used as a fallback.
 # For Gmail, use an app password: https://myaccount.google.com/apppasswords
 [notify.smtp]
 host = "smtp.gmail.com"
